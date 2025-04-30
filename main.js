@@ -14,6 +14,7 @@ const { showBanner } = require("./core/banner.js");
 const localStorage = require("./localStorage.json");
 const ethers = require("ethers");
 const { solveCaptcha } = require("./utils/captcha.js");
+const { swapSETH_YBTC, stakeYU, swapYBTC_YU, checkBalance } = require("./utils/contract.js");
 
 // const refcodes = loadData("reffCodes.txt");
 let REF_CODE = settings.REF_CODE;
@@ -105,7 +106,7 @@ class ClientAPI {
   }
 
   async log(msg, type = "info") {
-    const accountPrefix = `[Yala][${this.accountIndex + 1}][${this.itemData.address}][Ref by: ${REF_CODE}]`;
+    const accountPrefix = `[Yala][${this.accountIndex + 1}][${this.itemData.address}][${REF_CODE}]`;
     let ipPrefix = "[Local IP]";
     if (settings.USE_PROXY) {
       ipPrefix = this.proxyIP ? `[${this.proxyIP}]` : "[Unknown IP]";
@@ -299,11 +300,20 @@ class ClientAPI {
   async getBalance() {
     return this.makeRequest(`${this.baseURL}/points/myPoints?chain=11155111`, "get");
   }
+
+  async getInfoCaptain() {
+    return this.makeRequest(`${this.baseURL}/captain/info`, "get");
+  }
+
   async bindCode() {
     return this.makeRequest(`${this.baseURL}/account/joinFather`, "post", { fatherInviteCode: REF_CODE });
   }
   async checkin() {
     return this.makeRequest(`${this.baseURL}/points/dailyCollector`, "post");
+  }
+
+  async openBox() {
+    return this.makeRequest(`${this.baseURL}/captain/openBlindBox`, "post");
   }
 
   async faucet() {
@@ -396,15 +406,35 @@ class ClientAPI {
     } while (retries < 1 && userData.status !== 400);
 
     const balanceRes = await this.getBalance();
+    const captainRes = await this.getInfoCaptain();
+    const YTBC = await checkBalance(this.itemData.privateKey, "0xBBd3EDd4D3b519c0d14965d9311185CFaC8c3220");
+    const YU = await checkBalance(this.itemData.privateKey, "0xe0232D625Ea3B94698F0a7DfF702931B704083c9");
+
     if (userData?.success) {
       if (balanceRes.data) {
         userData["data"] = {
           ...userData.data,
           ...balanceRes.data,
+          YTBC,
+          YU,
         };
       }
-      const { totalPoints, inviteCode, followYala, fatherInviteCode, dailyCollectorPoints } = userData.data;
-      this.log(`Ref by: ${fatherInviteCode || REF_CODE} | Ref code: ${inviteCode} | Days checkin: ${dailyCollectorPoints || 0} | Total points: ${totalPoints || 0}`, "custom");
+
+      if (captainRes.data) {
+        userData["data"] = {
+          ...userData.data,
+          ...captainRes.data,
+        };
+      }
+
+      const { totalPoints, inviteCode, followYala, fatherInviteCode, dailyCollectorPoints, yu, mySelf } = userData.data;
+
+      this.log(
+        `Ref code: ${inviteCode} | Days checkin: ${dailyCollectorPoints || 0} | YBTC: ${YTBC} | YU: ${YU} | my staked/team staked (YU): ${mySelf?.yu || 0}/${yu || 0} | Total points: ${
+          totalPoints || 0
+        }`,
+        "custom"
+      );
       if (!fatherInviteCode) {
         await this.bindCode();
       }
@@ -414,29 +444,64 @@ class ClientAPI {
     return userData;
   }
 
-  async handleTask() {
-    const tasks = await this.getTasksTwitter();
-    if (!tasks.success) {
-      this.log("Can't get tasks", "error");
-      return;
-    }
-    const taskAvaliable = tasks.data.tweets.filter((item) => !item.is_done && !settings.SKIP_TASKS.includes(item.task_id));
+  getTimeUntilNextBoxOpen(lastOpenTimeStr, timeRemain) {
+    if (!lastOpenTimeStr) return true;
+    const lastOpenTime = new Date(lastOpenTimeStr);
+    const now = new Date();
+    const timeSinceLastOpen = now - lastOpenTime;
+    const timeUntilNextOpen = timeRemain * 60 * 60 * 1000 - timeSinceLastOpen;
 
-    if (taskAvaliable?.length == 0) {
-      this.log("No tasks available", "warning");
-      return;
+    if (timeSinceLastOpen >= timeRemain * 60 * 60 * 1000) {
+      return true;
+    } else {
+      const days = Math.floor(timeUntilNextOpen / (24 * 60 * 60 * 1000));
+      const hours = Math.floor((timeUntilNextOpen % (24 * 60 * 60 * 1000)) / (60 * 60 * 1000));
+      const minutes = Math.floor((timeUntilNextOpen % (60 * 60 * 1000)) / (60 * 1000));
+      const seconds = Math.floor((timeUntilNextOpen % (60 * 1000)) / 1000);
+
+      this.log(`Next open time: ${days} days ${hours} hours ${minutes} minutes ${seconds} seconds`, "warning");
+      return false;
     }
-    for (const task of taskAvaliable) {
-      const { task_id: taskId, text } = task;
-      const title = text.split("\n")[0];
-      const timeSleep = getRandomNumber(settings.DELAY_TASK[0], settings.DELAY_TASK[1]);
-      this.log(`Starting task ${taskId} | ${title} | Delay ${timeSleep}s...`, "info");
-      await sleep(timeSleep);
-      const result = await this.completeTaskTwitter(taskId);
-      if (result.success) {
-        this.log(`Task ${taskId} | ${title} completed successfully | ${JSON.stringify(result.data)}`, "success");
+  }
+
+  async handleOpenBox(userData) {
+    const teamSize = userData?.size || 0;
+    if (teamSize < 3) return;
+    let timeRemain = 72;
+    if (teamSize > 20) timeRemain = 72;
+    else if (teamSize > 10) timeRemain = 120;
+    else timeRemain = 168;
+    const boxs = userData?.blindBoxs || [];
+    for (const box of boxs) {
+      const isOpen = this.getTimeUntilNextBoxOpen(box.openTime, timeRemain);
+      if (isOpen) {
+        const res = await this.openBox();
+        if (res.success) {
+          const rw = res.data?.captainRewardPoints || 0;
+          this.log(`Open box success! Reward: ${rw.toFixed(2)}`, "success");
+        } else {
+          this.log(`Open box failed!`, "warning");
+        }
+      }
+    }
+  }
+
+  async handleOnchain(userData) {
+    // const res = await swapSETH_YBTC(this.itemData.privateKey, 0.1);
+    // const res = await swapYBTC_YU(this.itemData.privateKey, 0.03);
+    // console.log(res);
+    if (settings.AUTO_STAKE && +userData["YU"] > 10) {
+      this.log(`Starting stake YU...`);
+      let percent = getRandomNumber(settings.PERCENT_STAKE[0], settings.PERCENT_STAKE[1]);
+      if (percent > 90) {
+        percent = percent - 10;
+      }
+      const amount = (userData["YU"] * percent) / 100;
+      const res = await stakeYU(this.itemData.privateKey, amount.toFixed(2));
+      if (res.success) {
+        this.log(res.message, "success");
       } else {
-        this.log(`Task ${taskId} | ${title} failed: ${JSON.stringify(result.error || {})}`, "error");
+        this.log(res.message, "warning");
       }
     }
   }
@@ -462,17 +527,19 @@ class ClientAPI {
     const token = await this.getValidToken();
     if (!token) return;
     this.token = token;
+    // await this.handleOnchain();
+
     const userData = await this.handleSyncData();
     if (userData.success) {
-      // if (settings.AUTO_TASK) {
-      //   await this.handleTask();
-      // }
       if (settings.AUTO_FAUCET) {
         await this.handleFaucet();
       }
       await sleep(1);
       await this.handleCheckin(userData.data);
       await sleep(1);
+      await this.handleOpenBox(userData.data);
+      await sleep(1);
+      await this.handleOnchain(userData.data);
     } else {
       return this.log("Can't get use info...skipping", "error");
     }
@@ -518,18 +585,16 @@ async function main() {
   if (!resCheck.endpoint) return console.log(`Không thể tìm thấy ID API, có thể lỗi kết nỗi, thử lại sau!`.red);
   console.log(`${resCheck.message}`.yellow);
 
-  const data = privateKeys
-    .map((val, index) => {
-      const prvk = val.startsWith("0x") ? val : `0x${val}`;
-      const wallet = new ethers.Wallet(prvk);
-      const item = {
-        address: wallet.address,
-        privateKey: prvk,
-      };
-      new ClientAPI(item, index, proxies[index], resCheck.endpoint, {}).createUserAgent();
-      return item;
-    })
-    .reverse();
+  const data = privateKeys.map((val, index) => {
+    const prvk = val.startsWith("0x") ? val : `0x${val}`;
+    const wallet = new ethers.Wallet(prvk);
+    const item = {
+      address: wallet.address,
+      privateKey: prvk,
+    };
+    new ClientAPI(item, index, proxies[index], resCheck.endpoint, {}).createUserAgent();
+    return item;
+  });
   await sleep(1);
   while (true) {
     authInfos = require("./localStorage.json");

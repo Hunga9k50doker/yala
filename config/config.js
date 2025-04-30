@@ -28,7 +28,7 @@ const settings = {
   AUTO_BUY_PET: process.env.AUTO_BUY_PET ? process.env.AUTO_BUY_PET.toLowerCase() === "true" : false,
   AUTO_SELL_PET: process.env.AUTO_SELL_PET ? process.env.AUTO_SELL_PET.toLowerCase() === "true" : false,
 
-  CONNECT_WALLET: process.env.CONNECT_WALLET ? process.env.CONNECT_WALLET.toLowerCase() === "true" : false,
+  AUTO_STAKE: process.env.AUTO_STAKE ? process.env.AUTO_STAKE.toLowerCase() === "true" : false,
 
   ADVANCED_ANTI_DETECTION: process.env.ADVANCED_ANTI_DETECTION ? process.env.ADVANCED_ANTI_DETECTION.toLowerCase() === "true" : false,
   AUTO_TAP: process.env.AUTO_TAP ? process.env.AUTO_TAP.toLowerCase() === "true" : false,
@@ -52,7 +52,7 @@ const settings = {
 
   DELAY_BETWEEN_REQUESTS: process.env.DELAY_BETWEEN_REQUESTS && _isArray(process.env.DELAY_BETWEEN_REQUESTS) ? JSON.parse(process.env.DELAY_BETWEEN_REQUESTS) : [1, 5],
   DELAY_START_BOT: process.env.DELAY_START_BOT && _isArray(process.env.DELAY_START_BOT) ? JSON.parse(process.env.DELAY_START_BOT) : [1, 15],
-  DELAY_TAP: process.env.DELAY_TAP && _isArray(process.env.DELAY_TAP) ? JSON.parse(process.env.DELAY_TAP) : [1, 15],
+  PERCENT_STAKE: process.env.PERCENT_STAKE && _isArray(process.env.PERCENT_STAKE) ? JSON.parse(process.env.PERCENT_STAKE) : [1, 15],
   AMOUNT_TAPS: process.env.AMOUNT_TAPS && _isArray(process.env.AMOUNT_TAPS) ? JSON.parse(process.env.AMOUNT_TAPS) : [10, 15],
   DELAY_TASK: process.env.DELAY_TASK && _isArray(process.env.DELAY_TASK) ? JSON.parse(process.env.DELAY_TASK) : [10, 15],
 };
